@@ -1,4 +1,3 @@
-
 MAC_OS_VERSION=10.7
 MAKE_OPTS=-j5
 
@@ -112,11 +111,12 @@ test -f Makefile ||  $SRC_DIR/$WXPYTHON_DIR/configure  --disable-debug 		\
 							    --enable-webkit								\
 							    --enable-monolithic							\
 							    --enable-svg								\
-							    --with-expat								\
+							    --with-expat
+                                                            --with-macosx-version-min=10.6 
 							    --enable-universal-binary                   \
 							    $WX_DEBUG									 || exit_on_build_error
 
-#							    --with-macosx-version-min=$MAC_OS_VERSION   || exit_on_build_error
+#							       || exit_on_build_error
 
 
 make $MAKE_OPTS || exit_on_build_error
