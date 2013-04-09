@@ -111,9 +111,9 @@ test -f Makefile ||  $SRC_DIR/$WXPYTHON_DIR/configure  --disable-debug 		\
 							    --enable-webkit								\
 							    --enable-monolithic							\
 							    --enable-svg								\
-							    --with-expat
-                                                            --with-macosx-version-min=10.6 
-							    --enable-universal-binary                   \
+							    --with-expat \
+                                --with-macosx-version-min=10.6 \
+                                --enable-universal-binary \
 							    $WX_DEBUG									 || exit_on_build_error
 
 #							       || exit_on_build_error
