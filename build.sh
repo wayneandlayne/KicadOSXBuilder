@@ -159,7 +159,7 @@ cd $BUILD_DIR/$KICAD_DIR
 rm -r * #REMOVE TO DO AN INCREMENTAL BUILD
 mkdir -p $PREFIX_DIR/python/site-packages
 
- cmake $SRC_DIR/$KICAD_DIR -DCMAKE_VERBOSE_MAKEFILE=ON \ 
+ cmake $SRC_DIR/$KICAD_DIR -DCMAKE_VERBOSE_MAKEFILE=ON  \ 
                           -DKICAD_TESTING_VERSION=ON 	\
 						  -DKICAD_SCRIPTING=ON 			\
 						  -DKICAD_SCRIPTING_MODULES=ON  \
@@ -172,7 +172,7 @@ mkdir -p $PREFIX_DIR/python/site-packages
 						  -DPYTHON_EXECUTABLE=`which python` \
 						  -DPYTHON_SITE_PACKAGE_PATH=$PREFIX_DIR/python/site-packages \
 						  -DPYTHON_PACKAGES_PATH=$PREFIX_DIR/python/site-packages \
-						  -DCMAKE_OSX_ARCHITECTURES="x86_64 -arch i386"
+						  -DCMAKE_OSX_ARCHITECTURES="x86_64 -arch i386" \
                           -LA
 						  #-DCMAKE_OSX_ARCHITECTURES="i386" \
 
