@@ -172,7 +172,7 @@ mkdir -p $PREFIX_DIR/python/site-packages
 						  -DPYTHON_SITE_PACKAGE_PATH=$PREFIX_DIR/python/site-packages \
 						  -DPYTHON_PACKAGES_PATH=$PREFIX_DIR/python/site-packages \
 						  -DCMAKE_OSX_ARCHITECTURES="x86_64 -arch i386" \
-                          -DCMAKE_VERBOSE_MAKEFILES=ON \
+                          -DCMAKE_VERBOSE_MAKEFILE=ON \
                           -LA
 						  #-DCMAKE_OSX_ARCHITECTURES="i386" \
 
