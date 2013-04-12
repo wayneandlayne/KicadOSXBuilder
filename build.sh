@@ -172,9 +172,9 @@ mkdir -p $PREFIX_DIR/python/site-packages
 						  -DPYTHON_EXECUTABLE=`which python` \
 						  -DPYTHON_SITE_PACKAGE_PATH=$PREFIX_DIR/python/site-packages \
 						  -DPYTHON_PACKAGES_PATH=$PREFIX_DIR/python/site-packages \
-						  -DCMAKE_OSX_ARCHITECTURES="i386" \
+						  -DCMAKE_OSX_ARCHITECTURES="x86_64 -arch i386"
                           -LA
-						  #-DCMAKE_OSX_ARCHITECTURES="x86_64 -arch i386"
+						  #-DCMAKE_OSX_ARCHITECTURES="i386" \
 
 make $MAKE_OPTS install || exit_on_build_error
 cd ../..
