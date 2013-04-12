@@ -154,8 +154,9 @@ starting
 export PATH=$PREFIX_DIR/bin:$PATH
 export wxWidgets_ROOT_DIR=$PREFIX_DIR
 
-test -d $BUILD_DIR/$KICAD_DIR || mkdir $BUILD_DIR/$KICAD_DIR 
+test -d $BUILD_DIR/$KICAD_DIR || mkdir $BUILD_DIR/$KICAD_DIR
 cd $BUILD_DIR/$KICAD_DIR 
+rm -r * #REMOVE TO DO AN INCREMENTAL BUILD
 mkdir -p $PREFIX_DIR/python/site-packages
 
  cmake $SRC_DIR/$KICAD_DIR -DKICAD_TESTING_VERSION=ON 	\
