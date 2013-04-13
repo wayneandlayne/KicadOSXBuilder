@@ -78,8 +78,8 @@ STEPNAME="GET & UPDATE KICAD DEVEL SOURCES"
 STEP=2
 starting
 
-test -d $SRC_DIR/kicad || (cd $SRC_DIR; bzr branch lp:kicad ; cd ..) || exit_on_build_error
-test -d $SRC_DIR/kicad && (cd $SRC_DIR/kicad; bzr pull; cd ..) || exit_on_build_error
+#test -d $SRC_DIR/kicad || (cd $SRC_DIR; bzr branch lp:kicad ; cd ..) || exit_on_build_error
+#test -d $SRC_DIR/kicad && (cd $SRC_DIR/kicad; bzr pull; cd ..) || exit_on_build_error
 
 test -d $SRC_DIR/library || (cd $SRC_DIR; bzr branch lp:~kicad-lib-committers/kicad/library ; cd ..) || exit_on_build_error
 test -d $SRC_DIR/library && (cd $SRC_DIR/library; bzr pull; cd ..) || exit_on_build_error
