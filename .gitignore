@@ -1,0 +1,9 @@
+archive
+build
+build-debug
+output
+output-debug
+package
+package-debug
+src
+.DS_Store
