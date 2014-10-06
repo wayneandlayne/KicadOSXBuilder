@@ -1,12 +1,39 @@
-BUILD_TYPE=Release            # Set to the users desired build type
-BUILD_ARCHITECTURES=()        # An array to store which architectures will be built
-BUILD_ARCHITECTURES_STRING=
-CPU_COUNT=4                   # The number of CPUs (core) in the system (defaults to 4)
-WXWIDGETS_ADDITIONAL_FLAGS=
-REVISION_APPENDIX=
+SCRIPT_DIRECTORY="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-usage()
+BUILD_TYPE=Release            # Set to the users desired build type
+BUILD_ARCHITECTURES=()        # The architectures to build for
+BUILD_STEPS=()                # Which steps to build
+MAKE_THREAD_COUNT=0           # The number of threads for make to use
+CPU_COUNT=4                   # The number of CPUs (core) in the system (defaults to 4)
+
+KICAD_DIRECTORY=kicad
+KICAD_BRANCH="lp:kicad"
+# KICAD_BRANCH="lp:~cern-kicad/kicad/testing"
+# KICAD_BRANCH="lp:~kicad-testing-committers/kicad/testing"
+LIBRARY_DIRECTORY=library
+
+WXPYTHON_VERSION_MAJOR=2.9
+#WXPYTHON_VERSION_MINOR=5
+WXPYTHON_VERSION_MINOR=4
+WXPYTHON_VERSION="${WXPYTHON_VERSION_MAJOR}.${WXPYTHON_VERSION_MINOR}.0"
+WXPYTHON_SOURCE_DIRECTORY=wxPython-src-$WXPYTHON_VERSION
+WXPYTHON_DOWNLOAD_URL=http://downloads.sourceforge.net/project/wxpython/wxPython/$WXPYTHON_VERSION/$WXPYTHON_SOURCE_DIRECTORY.tar.bz2
+
+BUILD_DIRECTORY=$SCRIPT_DIRECTORY/build
+PREFIX_DIRECTORY=$SCRIPT_DIRECTORY/output
+PACKAGE_DIRECTORY=$SCRIPT_DIRECTORY/package
+SOURCE_DIRECTORY=$SCRIPT_DIRECTORY/src
+ARCHIVE_DIRECTORY=$SCRIPT_DIRECTORY/archive
+PATCH_DIRECTORY=$SCRIPT_DIRECTORY/patches
+
+print_usage()
 {
+
+	if [ "$1" != "" ]; then
+		echo ""
+		echo "`tput bold`Unknown option $1.`tput sgr0`"
+		echo ""
+	fi
 
 	echo "usage: build.sh [-a|--arch <architecture_string>] [-c|--cpus <cpu_count>] [-d|--debug] [-h|--help]"
 	echo ""
@@ -22,16 +49,18 @@ usage()
 	echo ""
 	echo "-h / --help: show help text."
 	echo ""
-
-}
-
-usage_unknown()
-{
-
+	echo "-s / --steps: <steps>: Select which steps to execute, either a single step number in the range [1-8] or a comma separated"
+	echo "                       list of steps or a step number followed by a comma followed by "..." ( eg. 3,... ). The later"
+	echo "                       syntax executes the step provided plus the following steps up until the last."
 	echo ""
-	echo "`tput bold`Unknown option $1.`tput sgr0`"
+	echo "-C / --cern-branch : Selects the CERN branch, that includes push&shove router, GAL and new TOOL framework"
 	echo ""
-	usage
+
+	if [ "$1" != "" ]; then
+		exit 1
+	else
+		exit 0
+	fi
 
 }
 
@@ -39,97 +68,169 @@ mrproper()
 {
 
 	rm -rdf build build-debug output output-debug package package-debug
+	exit
 
 }
 
-# Here comes the parameter parsing. Pretty rudimentary, but it works.
-
 while [ "$1" != "" ]; do
+
 	case $1 in
-		-a | --arch )    shift                     # This flag allow the user to specify a target architcture. There can be multiple occurences of this flag with different architectures.
-		                 BUILD_ARCHITECTURES+=($1)
-		                 ;;
-		-c | --cpus )    shift                     # With this flag the user can supply the ammount of CPUs (cores) in his/her system
-		                 CPU_COUNT=$1
-		                 ;;
-		-d | --debug )   BUILD_TYPE=Debug          # The user might select a debug build via this flag
-		                 ;;
-		-h | --help )    usage                     # Print the help text
-		                 exit 0
-		                 ;;
-		-m | --mrproper) mrproper                  # clean all build products
-		                 exit 0
-		                 ;;
-		* )              usage_unknown $1
-		                 exit 1
+
+		# This flag allow the user to specify a target architcture. There can be multiple occurences of this flag with different architectures.
+		-a | --arch )
+		shift
+		if [ "$1" == ppc ] || [ "$1" == i386 ] || [ "$1" == x86_64 ]; then
+			BUILD_ARCHITECTURES+=( $1 )
+		else
+			echo "Unknown architecture `tput bold`'$1'`tput sgr0`"
+			exit 1
+		fi
+		;;
+
+		# With this flag the user can supply the ammount of CPUs (cores) in his/her system
+		-c | --cpus )
+		shift
+		CPU_COUNT=$1
+		;;
+
+		# The user might select a debug build via this flag
+		-d | --debug )
+		BUILD_TYPE=Debug
+		;;
+
+		# CERN Branch
+		-C | --cern-branch)
+		KICAD_BRANCH="lp:~cern-kicad/kicad/testing"
+		KICAD_DIRECTORY=cern-kicad
+		;;
+
+		# Print the help text
+		-h | --help )
+		print_usage
+		;;
+
+		# clean all build products
+		-m | --mrproper )
+		mrproper
+		;;
+
+		# Select which steps to execute, either a single step number in the range [1-8] or a comma separated list of steps
+		# or a step number followed by a comma followed by "..." ( eg. 3,... ). The later syntax executes the step provided
+		# plus the following steps up until the last.
+
+		-s | --steps )
+		shift
+		IFS=',' read -a STEPS <<< "$1"
+
+		if [ ${#STEPS[*]} == 0 ]; then
+			echo "Error: The option '-s' requires at least one value to be passed!"
+			exit 1
+		fi
+
+		for STEP in ${STEPS[@]}
+		do
+			if [ $STEP != "..." ] && [ $STEP -gt 0 ] && [ $STEP -lt 9 ]; then
+				BUILD_STEPS+=( $STEP )
+			elif [ $STEP == "..." ]; then
+
+				if [ ${#BUILD_STEPS[*]} == 0 ]; then
+					echo "Error: '...' specified for -s without prior step number! "
+					exit 1
+				fi
+
+				LAST_STEP=${BUILD_STEPS[${#BUILD_STEPS[*]} - 1]}
+
+				for (( STEP_TO_ADD = ${BUILD_STEPS[${#BUILD_STEPS[*]} - 1]} + 1; STEP_TO_ADD <= 8; STEP_TO_ADD++ ))
+				do
+					BUILD_STEPS+=($STEP_TO_ADD)
+				done
+
+			else
+				echo "Error: Step number '$STEP' out of range 1-8"
+				exit 1
+			fi
+		done
+		;;
+
+		# "Catch-all" case for unrecognized commandline options
+		* )
+		print_usage $1
+
 	esac
+
 	shift
+
 done
 
-if [ ${#BUILD_ARCHITECTURES[@]} = 0 ]; then
-	BUILD_ARCHITECTURES=( i386 x86_64 )
-fi
 
-for ARCHITECTURE in "${BUILD_ARCHITECTURES[@]}"
-do
-	BUILD_ARCHITECTURES_STRING=$BUILD_ARCHITECTURES_STRING"-arch ${ARCHITECTURE} "
-done
+init()
+{
 
-MAKE_OPTIONS=-j$(($CPU_COUNT*2)) # use twice as many threads as CPUs (cores) are in the system
+	if [ ${#BUILD_ARCHITECTURES[@]} == 0 ]; then
+		BUILD_ARCHITECTURES=( i386 x86_64 )
+	fi
 
-WXPYTHON_VERSION=2.9.4.0
-WXPYTHON_MAC_OS_VERSION=`sw_vers -productVersion`
-WXPYTHON_SOURCE_DIRECTORY=wxPython-src-$WXPYTHON_VERSION
-WXPYTHON_DOWNLOAD_URL=http://downloads.sourceforge.net/project/wxpython/wxPython/$WXPYTHON_VERSION/$WXPYTHON_SOURCE_DIRECTORY.tar.bz2
+	if [ ${#BUILD_STEPS[@]} == 0 ]; then
+		BUILD_STEPS=( 1 2 3 4 5 6 7 8 )
+	fi
 
-KICAD_DIRECTORY=kicad
-LIBRARY_DIRECTORY=library
+	MAKE_THREAD_COUNT=-j$(($CPU_COUNT*2)) # use twice as many threads as CPUs (cores) are in the system
 
-SCRIPT_DIRECTORY="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+	if [ $BUILD_TYPE = Debug ]; then
+		WXWIDGETS_ADDITIONAL_FLAGS=--enable-debug
+		KICAD_BUILD_FLAGS="-DCMAKE_BUILD_TYPE=Debug"
+		BUILD_DIRECTORY=$BUILD_DIRECTORY-debug
+		PREFIX_DIRECTORY=$PREFIX_DIRECTORY-debug
+		PACKAGE_DIRECTORY=$PACKAGE_DIRECTORY-debug
+		REVISION_APPENDIX=-debug
+	fi
 
-BUILD_DIRECTORY=$SCRIPT_DIRECTORY/build
-PREFIX_DIRECTORY=$SCRIPT_DIRECTORY/output
-PACKAGE_DIRECTORY=$SCRIPT_DIRECTORY/package
-SOURCE_DIRECTORY=$SCRIPT_DIRECTORY/src
-ARCHIVE_DIRECTORY=$SCRIPT_DIRECTORY/archive
-PATCH_DIRECTORY=$SCRIPT_DIRECTORY/patches
+	mkdir -p $BUILD_DIRECTORY
+	mkdir -p $PREFIX_DIRECTORY
+	mkdir -p $PACKAGE_DIRECTORY
+	mkdir -p $ARCHIVE_DIRECTORY
+	mkdir -p $SOURCE_DIRECTORY
 
-if [ $BUILD_TYPE = Debug ]; then
-	WXWIDGETS_ADDITIONAL_FLAGS=--enable-debug
-	KICAD_BUILD_FLAGS="-DCMAKE_BUILD_TYPE=Debug"
-	BUILD_DIRECTORY=$BUILD_DIRECTORY-debug
-	PREFIX_DIRECTORY=$PREFIX_DIRECTORY-debug
-	PACKAGE_DIRECTORY=$PACKAGE_DIRECTORY-debug
-	REVISION_APPENDIX=-debug
-fi
+}
 
-case $BUILD_TYPE in
-	Release ) echo "BUILDING RELEASE BINARIES"
-		  ;;
-	Debug )   echo "BUILDING DEBUG BINARIES"
-            	  ;;
-esac
+main()
+{
 
-mkdir -p $BUILD_DIRECTORY
-mkdir -p $PREFIX_DIRECTORY
-mkdir -p $PACKAGE_DIRECTORY
-mkdir -p $ARCHIVE_DIRECTORY
-mkdir -p $SOURCE_DIRECTORY
+	init
+
+	case $BUILD_TYPE in
+		Release ) echo "BUILDING RELEASE BINARIES"
+			  ;;
+		Debug )   echo "BUILDING DEBUG BINARIES"
+	            	  ;;
+	esac
+
+	for STEP in ${BUILD_STEPS[*]}
+	do
+		step$STEP
+	done
+
+}
 
 exit_on_install_error()
 {
+
 	echo "install error on $STEP_NAME  STEP: $STEP_NUMBER"
 	exit 1
+
 }
 
 exit_on_build_error()
 {
+
 	echo "build error on $STEP_NAME  STEP: $STEP_NUMBER"
 	exit 2
+
 }
 
 print_step_starting_message()
 {
+
 	echo ""
 	echo ""
 	echo "****************************************************************************"
@@ -150,8 +251,8 @@ step1()
 		tar xfj $ARCHIVE_DIRECTORY/$WXPYTHON_SOURCE_DIRECTORY.tar.bz2 || exit_on_build_error
 		cd $WXPYTHON_SOURCE_DIRECTORY
 		echo "patching wxpython sources ..."
-		patch -p1 < $PATCH_DIRECTORY/wxpython-2.9.4.0-kicad.patch || exit_on_build_error
-		patch -p1 < $PATCH_DIRECTORY/wxwidgets-2.9.4.0_filehistory_osx.patch || exit_on_build_error
+		patch -p1 < $PATCH_DIRECTORY/wxpython-${WXPYTHON_VERSION}-kicad.patch || exit_on_build_error
+		patch -p1 < $PATCH_DIRECTORY/wxwidgets-${WXPYTHON_VERSION}_filehistory_osx.patch || exit_on_build_error
 		cd $SCRIPT_DIRECTORY
 	}
 
@@ -177,12 +278,28 @@ step2()
 	STEP_NUMBER=2
 	print_step_starting_message
 
-	test -d $SOURCE_DIRECTORY/$KICAD_DIRECTORY || (cd $SOURCE_DIRECTORY; bzr branch lp:kicad ; cd ..) || exit_on_build_error
+	test -d $SOURCE_DIRECTORY/$KICAD_DIRECTORY || (cd $SOURCE_DIRECTORY; bzr branch $KICAD_BRANCH $KICAD_DIRECTORY ; cd ..) || exit_on_build_error
 	test -d $SOURCE_DIRECTORY/$KICAD_DIRECTORY && (cd $SOURCE_DIRECTORY/$KICAD_DIRECTORY; bzr pull; cd ..) || exit_on_build_error
 
-	test -d $SOURCE_DIRECTORY/$LIBRARY_DIRECTORY || (cd $SOURCE_DIRECTORY; bzr branch lp:~kicad-lib-committers/kicad/library ; cd ..) || exit_on_build_error
+	test -d $SOURCE_DIRECTORY/$LIBRARY_DIRECTORY || (cd $SOURCE_DIRECTORY; bzr branch lp:~kicad-product-committers/kicad/library ; cd ..) || exit_on_build_error
 	test -d $SOURCE_DIRECTORY/$LIBRARY_DIRECTORY && (cd $SOURCE_DIRECTORY/$LIBRARY_DIRECTORY; bzr pull; cd ..) || exit_on_build_error
 
+        # Patches should be named NN_kicad_patchname.patch or NN_cern-kicad_patchname.patch
+        echo "Applying local $KICAD_DIRECTORY patches..."
+        cd $SOURCE_DIRECTORY/$KICAD_DIRECTORY
+        for p in $PATCH_DIRECTORY/[0-9][0-9]_${KICAD_DIRECTORY}_*.patch
+        do
+            if test -f $p; then
+                echo "patch: $p"
+                if ! patch -N -p1 < $p &> /dev/null ; then
+                    # See if it was applied already? (un-apply and
+                    # re-apply) If that doesn't work something has
+                    # changed and human intervention is needed.
+                    patch -s -R -p1 < $p &> /dev/null && patch -s -p1 < $p &> /dev/null \
+                        || ( echo "Could not apply!" && exit_on_build_error )
+                fi
+            fi
+        done
 }
 
 step3()
@@ -195,13 +312,11 @@ step3()
 	mkdir -p $BUILD_DIRECTORY/$WXPYTHON_SOURCE_DIRECTORY
 	cd $BUILD_DIRECTORY/$WXPYTHON_SOURCE_DIRECTORY
 
-	export OSX_ARCH_OPTS=$BUILD_ARCHITECTURES_STRING
-
 	IFS_OLD=$IFS
 	IFS=,
 	UNIVERSAL_BINARY_STRING="${BUILD_ARCHITECTURES[*]}"
 	IFS=$IFS_OLD
-	
+
 	test -f Makefile ||  $SOURCE_DIRECTORY/$WXPYTHON_SOURCE_DIRECTORY/configure  --disable-debug            \
 	                                                                             --prefix=$PREFIX_DIRECTORY \
 	                                                                             --enable-unicode	  	\
@@ -219,12 +334,13 @@ step3()
 	                                                                             --enable-monolithic	\
 	                                                                             --enable-svg               \
 	                                                                             --with-expat		\
+	                                                                             --with-macosx-version-min=10.7 \
 	                                                                             --enable-universal-binary="${UNIVERSAL_BINARY_STRING}" \
                                                                                  --with-macosx-version-min=10.6 \
 	                                                                             $WXWIDGETS_ADDITIONAL_FLAGS || exit_on_build_error
 
 
-	make $MAKE_OPTIONS || exit_on_build_error
+	make $MAKE_THREAD_COUNT || exit_on_build_error
 	make install || exit_on_build_error
 	cd $SCRIPT_DIRECTORY
 
@@ -261,21 +377,24 @@ step5()
 
 	mkdir -p $BUILD_DIRECTORY/$KICAD_DIRECTORY
 	cd $BUILD_DIRECTORY/$KICAD_DIRECTORY
+
 	mkdir -p $PREFIX_DIRECTORY/python/site-packages
 
 	CMAKE_ARCHITECTURE_STRING=
+        CMAKE_ASM_FLAGS=
 
 	for ARCHITECTURE in "${BUILD_ARCHITECTURES[@]}"
 	do
-		CMAKE_ARCHITECTURE_STRING=$CMAKE_ARCHITECTURE_STRING"${ARCHITECTURE} -arch "
+		CMAKE_ARCHITECTURE_STRING=$CMAKE_ARCHITECTURE_STRING"${ARCHITECTURE};"
+                CMAKE_ASM_FLAGS=$CMAKE_ASM_FLAGS" -arch ${ARCHITECTURE}"
 	done
-	CMAKE_ARCHITECTURE_STRING=${CMAKE_ARCHITECTURE_STRING% -arch }
+	CMAKE_ARCHITECTURE_STRING=${CMAKE_ARCHITECTURE_STRING%;}
 
-	cmake $SOURCE_DIRECTORY/$KICAD_DIRECTORY -DKICAD_TESTING_VERSION=ON                                        \
-	                                         -DKICAD_SCRIPTING=ON                                              \
+	cmake $SOURCE_DIRECTORY/$KICAD_DIRECTORY -DKICAD_SCRIPTING=ON                                              \
 	                                         -DKICAD_SCRIPTING_MODULES=ON                                      \
 	                                         -DKICAD_SCRIPTING_WXPYTHON=ON                                     \
 	                                         -DCMAKE_CXX_FLAGS=-D__ASSERTMACROS__                              \
+                                                 -DCMAKE_ASM_FLAGS="${CMAKE_ASM_FLAGS}"                            \
 	                                         -DCMAKE_INSTALL_PREFIX=$PREFIX_DIRECTORY                          \
 	                                         -DCMAKE_FIND_FRAMEWORK=LAST                                       \
 	                                         -DwxWidgets_CONFIG_EXECUTABLE=$PREFIX_DIRECTORY/bin/wx-config     \
@@ -294,7 +413,7 @@ step5()
 	rm -f $BUILD_DIRECTORY/$KICAD_DIRECTORY/pcbnew/pcbnew_wrap.cxx
 	rm -f $BUILD_DIRECTORY/$KICAD_DIRECTORY/pcbnew/scripting/pcbnewPYTHON_wrap.cxx
 
-	make $MAKE_OPTIONS install || exit_on_build_error
+	make $MAKE_THREAD_COUNT install || exit_on_build_error
 
 	cd $SCRIPT_DIRECTORY
 
@@ -325,37 +444,37 @@ step7()
 
 	INSTALL_NAME_TOOL="xcrun install_name_tool"
 	KICAD_FRAMEWORKS_PATH="@executable_path/../../../kicad.app/Contents/Frameworks/"
-	
+
 	PYTHON_SITE_PKGS=$PREFIX_DIRECTORY/bin/kicad.app/Contents/Frameworks/python2.7/site-packages
 	mkdir -p $PYTHON_SITE_PKGS
 
 	FRAMEWORK_LIBS=$PREFIX_DIRECTORY/bin/kicad.app/Contents/Frameworks/
-	
+
 	PCBNEW_EXES=$PREFIX_DIRECTORY/bin/pcbnew.app/Contents/MacOS
 	KICAD_EXES=$PREFIX_DIRECTORY/bin/kicad.app/Contents/MacOS
 
 	echo "copying kicad libs"
 	cp $BUILD_DIRECTORY/$KICAD_DIRECTORY/pcbnew/_pcbnew.so 	     $PYTHON_SITE_PKGS
 	cp $BUILD_DIRECTORY/$KICAD_DIRECTORY/pcbnew/pcbnew.py  	     $PYTHON_SITE_PKGS
-	
-	cp -RfP $PREFIX_DIRECTORY/lib/libwx_osx_cocoau-2.9.4.0.0.dylib $FRAMEWORK_LIBS
-	cp -RfP $PREFIX_DIRECTORY/lib/libwx_osx_cocoau_gl-2.9.4.0.0.dylib $FRAMEWORK_LIBS
-	
+
+	cp -RfP $PREFIX_DIRECTORY/lib/libwx_osx_cocoau-${WXPYTHON_VERSION}.0.dylib $FRAMEWORK_LIBS
+	cp -RfP $PREFIX_DIRECTORY/lib/libwx_osx_cocoau_gl-${WXPYTHON_VERSION}.0.dylib $FRAMEWORK_LIBS
+
 	cd $FRAMEWORK_LIBS
-	ln -s libwx_osx_cocoau-2.9.4.0.0.dylib libwx_osx_cocoau-2.9.dylib
-	ln -s libwx_osx_cocoau-2.9.4.0.0.dylib libwx_osx_cocoau-2.9.4.dylib
+	ln -s libwx_osx_cocoau-${WXPYTHON_VERSION}.0.dylib libwx_osx_cocoau-${WXPYTHON_VERSION_MAJOR}.dylib
+	ln -s libwx_osx_cocoau-${WXPYTHON_VERSION}.0.dylib libwx_osx_cocoau-${WXPYTHON_VERSION_MAJOR}.${WXPYTHON_VERSION_MINOR}.dylib
 
-	ln -s libwx_osx_cocoau_gl-2.9.4.0.0.dylib libwx_osx_cocoau_gl-2.9.dylib
-	ln -s libwx_osx_cocoau_gl-2.9.4.0.0.dylib libwx_osx_cocoau_gl-2.9.4.dylib
+	ln -s libwx_osx_cocoau_gl-${WXPYTHON_VERSION}.0.dylib libwx_osx_cocoau_gl-${WXPYTHON_VERSION_MAJOR}.dylib
+	ln -s libwx_osx_cocoau_gl-${WXPYTHON_VERSION}.0.dylib libwx_osx_cocoau_gl-${WXPYTHON_VERSION_MAJOR}.${WXPYTHON_VERSION_MINOR}.dylib
 
-	$INSTALL_NAME_TOOL -id $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau-2.9.4.0.0.dylib $FRAMEWORK_LIBS/libwx_osx_cocoau-2.9.4.0.0.dylib
-	$INSTALL_NAME_TOOL -id $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau_gl-2.9.4.0.0.dylib $FRAMEWORK_LIBS/libwx_osx_cocoau_gl-2.9.4.0.0.dylib
-	$INSTALL_NAME_TOOL -change $PREFIX_DIRECTORY/lib/libwx_osx_cocoau-2.9.4.0.0.dylib $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau-2.9.4.0.0.dylib $FRAMEWORK_LIBS/libwx_osx_cocoau_gl-2.9.4.0.0.dylib
+	$INSTALL_NAME_TOOL -id $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau-${WXPYTHON_VERSION}.0.dylib $FRAMEWORK_LIBS/libwx_osx_cocoau-${WXPYTHON_VERSION}.0.dylib
+	$INSTALL_NAME_TOOL -id $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau_gl-${WXPYTHON_VERSION}.0.dylib $FRAMEWORK_LIBS/libwx_osx_cocoau_gl-${WXPYTHON_VERSION}.0.dylib
+	$INSTALL_NAME_TOOL -change $PREFIX_DIRECTORY/lib/libwx_osx_cocoau-${WXPYTHON_VERSION}.0.dylib $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau-${WXPYTHON_VERSION}.0.dylib $FRAMEWORK_LIBS/libwx_osx_cocoau_gl-${WXPYTHON_VERSION}.0.dylib
 
 	cd $SCRIPT_DIRECTORY
-	cp -rf $PREFIX_DIRECTORY/lib/python2.7/site-packages/wx-2.9.4-osx_cocoa/wx   $PYTHON_SITE_PKGS
+	cp -rf $PREFIX_DIRECTORY/lib/python2.7/site-packages/wx-${WXPYTHON_VERSION_MAJOR}.${WXPYTHON_VERSION_MINOR}-osx_cocoa/wx   $PYTHON_SITE_PKGS
 
-	for APP in bitmap2component eeschema gerbview pcbnew pcb_calculator kicad cvpcb 
+	for APP in bitmap2component eeschema gerbview pcbnew pcb_calculator kicad cvpcb
 	do
 		echo repackaging $APP
 		cp -fP $BUILD_DIRECTORY/$KICAD_DIRECTORY/$APP/$APP.app/Contents/MacOS/$APP $PREFIX_DIRECTORY/bin/$APP.app/Contents/MacOS/$APP.bin
@@ -363,14 +482,14 @@ step7()
 		chmod a+x $PREFIX_DIRECTORY/bin/$APP.app/Contents/MacOS/$APP
 
 		echo "fixing references in $APP"
-		$INSTALL_NAME_TOOL -change $PREFIX_DIRECTORY/lib/libwx_osx_cocoau_gl-2.9.dylib $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau_gl-2.9.dylib $PREFIX_DIRECTORY/bin/$APP.app/Contents/MacOS/$APP.bin
-		$INSTALL_NAME_TOOL -change $PREFIX_DIRECTORY/lib/libwx_osx_cocoau-2.9.dylib $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau-2.9.dylib $PREFIX_DIRECTORY/bin/$APP.app/Contents/MacOS/$APP.bin 		
+		$INSTALL_NAME_TOOL -change $PREFIX_DIRECTORY/lib/libwx_osx_cocoau_gl-${WXPYTHON_VERSION_MAJOR}.dylib $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau_gl-${WXPYTHON_VERSION_MAJOR}.dylib $PREFIX_DIRECTORY/bin/$APP.app/Contents/MacOS/$APP.bin
+		$INSTALL_NAME_TOOL -change $PREFIX_DIRECTORY/lib/libwx_osx_cocoau-${WXPYTHON_VERSION_MAJOR}.dylib $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau-${WXPYTHON_VERSION_MAJOR}.dylib $PREFIX_DIRECTORY/bin/$APP.app/Contents/MacOS/$APP.bin
 	done
 
 	echo "fixing references in wxPython libs"
-	
-	find $PREFIX_DIRECTORY -name "*.so" -exec $INSTALL_NAME_TOOL -change $PREFIX_DIRECTORY/lib/libwx_osx_cocoau-2.9.dylib $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau-2.9.dylib {} \;
-	find $PREFIX_DIRECTORY -name "*.so" -exec $INSTALL_NAME_TOOL -change $PREFIX_DIRECTORY/lib/libwx_osx_cocoau_gl-2.9.dylib $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau_gl-2.9.dylib {} \;
+
+	find $PREFIX_DIRECTORY -name "*.so" -exec $INSTALL_NAME_TOOL -change $PREFIX_DIRECTORY/lib/libwx_osx_cocoau-${WXPYTHON_VERSION_MAJOR}.dylib $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau-${WXPYTHON_VERSION_MAJOR}.dylib {} \;
+	find $PREFIX_DIRECTORY -name "*.so" -exec $INSTALL_NAME_TOOL -change $PREFIX_DIRECTORY/lib/libwx_osx_cocoau_gl-${WXPYTHON_VERSION_MAJOR}.dylib $KICAD_FRAMEWORKS_PATH/libwx_osx_cocoau_gl-${WXPYTHON_VERSION_MAJOR}.dylib {} \;
 
 	cd $SCRIPT_DIRECTORY
 }
@@ -398,13 +517,6 @@ step8()
 
 }
 
-step1
-step2
-step3
-step4
-step5
-step6
-step7
-step8
+main
 
 echo "Done!! :-)"
