@@ -149,11 +149,8 @@ check_wx_build() {
 
 check_kicad() {
 	if [ ! -d kicad ]; then
-		mkdir kicad
-		cd kicad
 		echo "Checking out KiCad source.  This is going to take a while."
 		bzr branch lp:kicad
-		cd -
 	fi
 	cd kicad
 	echo "Updating KiCad"
