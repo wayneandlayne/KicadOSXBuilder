@@ -166,8 +166,8 @@ check_kicad() {
 
 print_banner
 check_compiler
-check_brew
-check_brew_depends
+#check_brew
+#check_brew_depends
 check_bzrtools
 check_kicad
 check_wx_build
